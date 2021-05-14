@@ -28,17 +28,30 @@ display = matrix.display
 network = Network(status_neopixel=board.NEOPIXEL, debug=False)
 
 # --- Drawing setup ---
-group = displayio.Group(max_size=4)  # Create a Group
-bitmap = displayio.Bitmap(64, 32, 2)  # Create a bitmap object,width, height, bit depth
+group = displayio.Group(max_size=5)  # Create a Group
 color = displayio.Palette(4)  # Create a color palette
 color[0] = 0x000000  # black background
 color[1] = 0x0085FF  # blue-green
 color[2] = 0xCC4000  # amber
 color[3] = 0x85FF00  # greenish
 
+# menu
+bitmap_file = open("/menu.bmp", "rb")
+# Setup the file as the bitmap data source
+bitmap_menu = displayio.OnDiskBitmap(bitmap_file)
+
+# Create a TileGrid to hold the bitmap
+tile_grid_menu = displayio.TileGrid(bitmap_menu,
+                            pixel_shader=displayio.ColorConverter(),
+                            width = 1,
+                            height = 1,
+                            tile_width = 10,
+                            tile_height = 7)
+
+# Add the TileGrid to the Group
+group.append(tile_grid_menu)
+
 # Create a TileGrid using the Bitmap and Palette
-tile_grid = displayio.TileGrid(bitmap, pixel_shader=color)
-group.append(tile_grid)  # Add the TileGrid to the Group
 display.show(group)
 
 if not DEBUG:
