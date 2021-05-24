@@ -5,6 +5,7 @@ import time
 import board
 import displayio
 import terminalio
+from digitalio import DigitalInOut, Direction, Pull
 from adafruit_display_text.label import Label
 from adafruit_bitmap_font import bitmap_font
 from adafruit_matrixportal.network import Network
@@ -60,7 +61,13 @@ else:
     font = terminalio.FONT
 
 clock_label = Label(font, max_glyphs=8)
+youtube_label = Label(font, max_glyphs=8)
+youtube_label.text = "Hola"
+bbx, bby, bbwidth, bbh = clock_label.bounding_box
+youtube_label.x = round(display.width / 2 - bbwidth / 2)
+youtube_label.y = display.height // 2
 
+labels = [clock_label, youtube_label]
 
 def update_time(*, hours=None, minutes=None, show_colon=False):
     now = time.localtime()  # Get the time values we need
@@ -101,6 +108,10 @@ last_check = None
 update_time(show_colon=True)  # Display whatever time is on the board
 group.append(clock_label)  # add the clock label to the group
 
+# Botones
+button_down = DigitalInOut(board.BUTTON_DOWN)
+button_down.switch_to_input(pull=Pull.UP)
+
 while True:
     if last_check is None or time.monotonic() > last_check + 3600:
         try:
@@ -113,4 +124,15 @@ while True:
             print("Some error occured, retrying! -", e)
 
     update_time()
-    time.sleep(1)
+    print(group[-1].text)
+    if not button_down.value:
+        if tile_grid_menu[0] == 1:
+            tile_grid_menu[0] = 0
+            group.pop()
+            group.append(labels[0])
+        else:
+            tile_grid_menu[0] = 1
+            group.pop()
+            group.append(labels[1])
+
+    time.sleep(.2)
