@@ -3,6 +3,7 @@
 
 import time
 import board
+import busio
 import displayio
 import terminalio
 from clock import ClockView
@@ -11,6 +12,17 @@ from adafruit_display_text.label import Label
 from adafruit_bitmap_font import bitmap_font
 from adafruit_matrixportal.network import Network
 from adafruit_matrixportal.matrix import Matrix
+import adafruit_esp32spi.adafruit_esp32spi_socket as socket
+from adafruit_esp32spi import adafruit_esp32spi
+import adafruit_requests
+
+esp32_cs = DigitalInOut(board.ESP_CS)
+esp32_ready = DigitalInOut(board.ESP_BUSY)
+esp32_reset = DigitalInOut(board.ESP_RESET)
+spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
+esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
+
+adafruit_requests.set_socket(socket, esp)
 
 BLINK = True
 DEBUG = False
@@ -27,7 +39,7 @@ print("Time will be set for {}".format(secrets["timezone"]))
 # --- Display setup ---
 matrix = Matrix()
 display = matrix.display
-network = Network(status_neopixel=board.NEOPIXEL, debug=False)
+network = Network(status_neopixel=board.NEOPIXEL, debug=False, external_spi=spi, esp=esp)
 
 # --- Drawing setup ---
 group = displayio.Group(max_size=5)  # Create a Group
@@ -60,6 +72,15 @@ font = bitmap_font.load_font("/RetroGaming-11.bdf")
 
 my_clock = ClockView(color, font, display)
 
+def get_subs(api_key):
+    response = adafruit_requests.get("https://youtube.googleapis.com/youtube/v3/channels?part=statistics&id=UCjhbs3YjA7CPUw0-Dgb3f2A&key={}".format(api_key))
+
+    json_youtube = response.json()
+    print(json_youtube["items"][0]["statistics"]["subscriberCount"])
+
+    return json_youtube["items"][0]["statistics"]["subscriberCount"]
+
+# get_subs(secrets["youtube-key"])
 youtube_label = Label(font, max_glyphs=8)
 youtube_label.text = "Hola"
 bbx, bby, bbwidth, bbh = youtube_label.bounding_box
@@ -71,6 +92,7 @@ labels = [my_clock.clock_label, youtube_label]
 last_check = None
 my_clock.update_time(show_colon=True)  # Display whatever time is on the board
 group.append(labels[0])  # add the clock label to the group
+last_check_view = None
 
 # Botones
 button_down = DigitalInOut(board.BUTTON_DOWN)
@@ -84,11 +106,23 @@ while True:
             )  # Make sure a colon is displayed while updating
             network.get_local_time()  # Synchronize Board's clock to Internet
             last_check = time.monotonic()
+            youtube_label.text = get_subs(secrets["youtube-key"])
         except RuntimeError as e:
             print("Some error occured, retrying! -", e)
 
     my_clock.update_time()
     if not button_down.value:
+        if tile_grid_menu[0] == 1:
+            tile_grid_menu[0] = 0
+            group.pop()
+            group.append(labels[0])
+        else:
+            tile_grid_menu[0] = 1
+            group.pop()
+            group.append(labels[1])
+    
+    if last_check_view is None or time.monotonic() > last_check_view + 10:
+        last_check_view = time.monotonic()
         if tile_grid_menu[0] == 1:
             tile_grid_menu[0] = 0
             group.pop()
