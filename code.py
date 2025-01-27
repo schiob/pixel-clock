@@ -97,31 +97,39 @@ manager.add_view(clock_view)
 manager.add_view(homeassistant_view)
 
 # Show the first view (clock)
-manager.set_view(1)
-
-refresh_time = None
+manager.set_view(0)
 
 # ---------------------
 # 3) Main Loop
 # ---------------------
+# variable para refrescar tiempo NTP
+ntp_refresh_time = None
+
+# variable para cambiar de vista
+view_switch_time = None
+
 while True:
-    # Periodically get time from remote server
-    if (not refresh_time) or (time.monotonic() - refresh_time) > 900:
+    # 1) Actualizar hora si pasan 900 seg
+    if (not ntp_refresh_time) or ((time.monotonic() - ntp_refresh_time) > 900):
         try:
             print("Obtaining time from Adafruit IO server...")
             matrixportal.get_local_time()
-            refresh_time = time.monotonic()
+            ntp_refresh_time = time.monotonic()
         except RuntimeError as e:
             print("Unable to obtain time, retrying -", e)
             continue
 
-    # Update whichever view is currently active
+    # 2) Actualizar la vista actual
     manager.update()
 
+    # 3) Procesar MQTT
     mqtt_client.loop()
 
-    # Example of switching views every 10 seconds:
-    # if time.monotonic() - refresh_time > 10:
-    #     manager.next_view()
+    # 4) Cambiar de vista cada 10 segundos
+    if (not view_switch_time) or ((time.monotonic() - view_switch_time) > 10):
+        manager.next_view()
+        # Reiniciamos el tiempo de cambio para que se cumplan
+        # otros 10 segundos antes de cambiar de nuevo
+        view_switch_time = time.monotonic()
 
     time.sleep(0.2)
