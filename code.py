@@ -1,135 +1,127 @@
-# Metro Matrix Clock
-# Runs on Airlift Metro M4 with 64x32 RGB Matrix display & shield
-
 import time
+import displayio
 import board
 import busio
-import displayio
-import terminalio
-from clock import ClockView
-from digitalio import DigitalInOut, Direction, Pull
-from adafruit_display_text.label import Label
-from adafruit_bitmap_font import bitmap_font
-from adafruit_matrixportal.network import Network
-from adafruit_matrixportal.matrix import Matrix
-import adafruit_esp32spi.adafruit_esp32spi_socket as socket
-from adafruit_esp32spi import adafruit_esp32spi
+from digitalio import DigitalInOut
+
+import adafruit_connection_manager
 import adafruit_requests
+from adafruit_esp32spi import adafruit_esp32spi
+from adafruit_bitmap_font import bitmap_font
+from adafruit_matrixportal.matrixportal import MatrixPortal
+import adafruit_minimqtt.adafruit_minimqtt as MQTT
+
+from secrets import secrets
+
+# Import our views and ViewManager
+from view_manager import ViewManager
+from clock import ClockView
+from home_assistant import HomeAssistantView
+
+# -------------------------
+# 1) WiFi + Hardware Setup
+# -------------------------
+if secrets == {"ssid": None, "password": None}:
+    raise RuntimeError(
+        "WiFi secrets are not set up. Please add them to settings.toml or secrets.py.")
 
 esp32_cs = DigitalInOut(board.ESP_CS)
 esp32_ready = DigitalInOut(board.ESP_BUSY)
 esp32_reset = DigitalInOut(board.ESP_RESET)
-spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
+
+if "SCK1" in dir(board):
+    spi = busio.SPI(board.SCK1, board.MOSI1, board.MISO1)
+else:
+    spi = busio.SPI(board.SCK, board.MOSI, board.MISO)
+
 esp = adafruit_esp32spi.ESP_SPIcontrol(spi, esp32_cs, esp32_ready, esp32_reset)
+pool = adafruit_connection_manager.get_radio_socketpool(esp)
+ssl_context = adafruit_connection_manager.get_radio_ssl_context(esp)
+requests = adafruit_requests.Session(pool, ssl_context)
 
-adafruit_requests.set_socket(socket, esp)
+print("Connecting to WiFi...")
+while not esp.is_connected:
+    try:
+        esp.connect_AP(secrets["ssid"], secrets["password"])
+    except OSError as e:
+        print("Could not connect to AP, retrying:", e)
+        continue
+print("Connected to:", esp.ap_info.ssid)
+print("My IP address is", esp.ipv4_address)
 
-BLINK = True
-DEBUG = False
+matrixportal = MatrixPortal(status_neopixel=board.NEOPIXEL, esp=esp)
+display = matrixportal.display
 
-# Get wifi details and more from a secrets.py file
-try:
-    from secrets import secrets
-except ImportError:
-    print("WiFi secrets are kept in secrets.py, please add them there!")
-    raise
-print("    Metro Minimal Clock")
-print("Time will be set for {}".format(secrets["timezone"]))
+# Set up the palette/colors
+COLOR_BLACK = 0x000000
+COLOR_BLUE_GREEN = 0x0085FF
+COLOR_AMBER = 0xCC4000
+COLOR_GREENISH = 0x85FF00
 
-# --- Display setup ---
-matrix = Matrix()
-display = matrix.display
-network = Network(status_neopixel=board.NEOPIXEL, debug=False, external_spi=spi, esp=esp)
+PALETTE_SIZE = 4
+palette = displayio.Palette(PALETTE_SIZE)
+palette[0] = COLOR_BLACK       # Fondo negro
+palette[1] = COLOR_BLUE_GREEN  # Azul-verde
+palette[2] = COLOR_AMBER       # Ámbar
+palette[3] = COLOR_GREENISH    # Verdoso
 
-# --- Drawing setup ---
-group = displayio.Group(max_size=5)  # Create a Group
-color = displayio.Palette(4)  # Create a color palette
-color[0] = 0x000000  # black background
-color[1] = 0x0085FF  # blue-green
-color[2] = 0xCC4000  # amber
-color[3] = 0x85FF00  # greenish
+# Load font
+FONT_PATH = "/RetroGaming-11.bdf"
+font = bitmap_font.load_font(FONT_PATH)
+font.load_glyphs(
+    b'0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!@#$%^&*()-_=+[]{}|;:",.<>/?`~ '
+)
 
-# menu
-bitmap_file = open("/menu.bmp", "rb")
-# Setup the file as the bitmap data source
-bitmap_menu = displayio.OnDiskBitmap(bitmap_file)
+# Clear anything from the display root group
+display.root_group = displayio.Group()
 
-# Create a TileGrid to hold the bitmap
-tile_grid_menu = displayio.TileGrid(bitmap_menu,
-                            pixel_shader=displayio.ColorConverter(),
-                            width = 1,
-                            height = 1,
-                            tile_width = 10,
-                            tile_height = 7)
+# MQTT CLIENT
+mqtt_broker = "192.168.0.22"
+mqtt_port = 1883
 
-# Add the TileGrid to the Group
-group.append(tile_grid_menu)
+mqtt_client = MQTT.MQTT(
+    broker=mqtt_broker,
+    port=mqtt_port,
+    socket_pool=pool,
+)
 
-# Create a TileGrid using the Bitmap and Palette
-display.show(group)
+# -------------------------------------
+# 2) Create our Views and ViewManager
+# -------------------------------------
+clock_view = ClockView(palette, font, display)
+homeassistant_view = HomeAssistantView(
+    palette, font, display, mqtt_client, "youtube")
 
-font = bitmap_font.load_font("/RetroGaming-11.bdf")
+manager = ViewManager(display)
+manager.add_view(clock_view)
+manager.add_view(homeassistant_view)
 
-my_clock = ClockView(color, font, display)
+# Show the first view (clock)
+manager.set_view(1)
 
-def get_subs(api_key):
-    response = adafruit_requests.get("https://youtube.googleapis.com/youtube/v3/channels?part=statistics&id=UCjhbs3YjA7CPUw0-Dgb3f2A&key={}".format(api_key))
+refresh_time = None
 
-    json_youtube = response.json()
-    print(json_youtube["items"][0]["statistics"]["subscriberCount"])
-
-    return json_youtube["items"][0]["statistics"]["subscriberCount"]
-
-# get_subs(secrets["youtube-key"])
-youtube_label = Label(font, max_glyphs=8)
-youtube_label.text = "Hola"
-bbx, bby, bbwidth, bbh = youtube_label.bounding_box
-youtube_label.x = round(display.width / 2 - bbwidth / 2)
-youtube_label.y = display.height // 2
-
-labels = [my_clock.clock_label, youtube_label]
-
-last_check = None
-my_clock.update_time(show_colon=True)  # Display whatever time is on the board
-group.append(labels[0])  # add the clock label to the group
-last_check_view = None
-
-# Botones
-button_down = DigitalInOut(board.BUTTON_DOWN)
-button_down.switch_to_input(pull=Pull.UP)
-
+# ---------------------
+# 3) Main Loop
+# ---------------------
 while True:
-    if last_check is None or time.monotonic() > last_check + 3600:
+    # Periodically get time from remote server
+    if (not refresh_time) or (time.monotonic() - refresh_time) > 900:
         try:
-            my_clock.update_time(
-                show_colon=True
-            )  # Make sure a colon is displayed while updating
-            network.get_local_time()  # Synchronize Board's clock to Internet
-            last_check = time.monotonic()
-            youtube_label.text = get_subs(secrets["youtube-key"])
+            print("Obtaining time from Adafruit IO server...")
+            matrixportal.get_local_time()
+            refresh_time = time.monotonic()
         except RuntimeError as e:
-            print("Some error occured, retrying! -", e)
+            print("Unable to obtain time, retrying -", e)
+            continue
 
-    my_clock.update_time()
-    if not button_down.value:
-        if tile_grid_menu[0] == 1:
-            tile_grid_menu[0] = 0
-            group.pop()
-            group.append(labels[0])
-        else:
-            tile_grid_menu[0] = 1
-            group.pop()
-            group.append(labels[1])
-    
-    if last_check_view is None or time.monotonic() > last_check_view + 10:
-        last_check_view = time.monotonic()
-        if tile_grid_menu[0] == 1:
-            tile_grid_menu[0] = 0
-            group.pop()
-            group.append(labels[0])
-        else:
-            tile_grid_menu[0] = 1
-            group.pop()
-            group.append(labels[1])
+    # Update whichever view is currently active
+    manager.update()
 
-    time.sleep(.2)
+    mqtt_client.loop()
+
+    # Example of switching views every 10 seconds:
+    # if time.monotonic() - refresh_time > 10:
+    #     manager.next_view()
+
+    time.sleep(0.2)
