@@ -9,14 +9,14 @@ import adafruit_requests
 from adafruit_esp32spi import adafruit_esp32spi
 from adafruit_bitmap_font import bitmap_font
 from adafruit_matrixportal.matrixportal import MatrixPortal
-import adafruit_minimqtt.adafruit_minimqtt as MQTT
 
 from secrets import secrets
 
 # Import our views and ViewManager
 from view_manager import ViewManager
-from clock import ClockView
-from home_assistant import HomeAssistantView
+from mqtt_manager import MqttManager
+from view_clock import ClockView
+from view_youtube import YoutubeView
 
 # -------------------------
 # 1) WiFi + Hardware Setup
@@ -76,25 +76,28 @@ font.load_glyphs(
 display.root_group = displayio.Group()
 
 # MQTT CLIENT
-mqtt_broker = "192.168.0.22"
-mqtt_port = 1883
-
-mqtt_client = MQTT.MQTT(
-    broker=mqtt_broker,
-    port=mqtt_port,
-    socket_pool=pool,
+mqtt_manager = MqttManager(
+    broker="192.168.0.22",
+    port=1883,
+    pool=pool,
+    keep_alive=60
 )
+mqtt_manager.connect()
 
+mqtt_manager.subscribe("matrix/view")
 # -------------------------------------
 # 2) Create our Views and ViewManager
 # -------------------------------------
 clock_view = ClockView(palette, font, display)
-homeassistant_view = HomeAssistantView(
-    palette, font, display, mqtt_client, "youtube")
+homeassistant_view = YoutubeView(
+    palette, font, display, mqtt_manager, "matrix/youtube")
 
 manager = ViewManager(display)
 manager.add_view(clock_view)
 manager.add_view(homeassistant_view)
+
+# set view manager in mqtt to change views
+mqtt_manager.set_view_manager(manager)
 
 # Show the first view (clock)
 manager.set_view(0)
@@ -123,13 +126,13 @@ while True:
     manager.update()
 
     # 3) Procesar MQTT
-    mqtt_client.loop()
+    mqtt_manager.loop()
 
     # 4) Cambiar de vista cada 10 segundos
-    if (not view_switch_time) or ((time.monotonic() - view_switch_time) > 10):
-        manager.next_view()
-        # Reiniciamos el tiempo de cambio para que se cumplan
-        # otros 10 segundos antes de cambiar de nuevo
-        view_switch_time = time.monotonic()
+    # if (not view_switch_time) or ((time.monotonic() - view_switch_time) > 10):
+    #     manager.next_view()
+    #     # Reiniciamos el tiempo de cambio para que se cumplan
+    #     # otros 10 segundos antes de cambiar de nuevo
+    #     view_switch_time = time.monotonic()
 
     time.sleep(0.2)
